@@ -9,12 +9,17 @@ placement. Adding real trading would be a separate, reviewed step.
 It's also a learning project: keep code beginner-readable, and explain the
 "why" in comments.
 
+Also contains a US **stock desk** (`stock_desk/`, run by `stock_run.py`) that
+day-trades in an Alpaca PAPER account via the `Stock desk` GitHub workflow.
+`config.TRADING_URL` must stay the paper URL.
+
 ## Environment
 - macOS. Python standard library only; no dependencies to run.
 
 ## Commands
 - Demo (simulated market): `python3 run.py --demo`
 - Live data, fake money:   `caffeinate -i python3 run.py`
+- Stock desk (needs Alpaca paper keys in env): `python3 stock_run.py --print-only`
 - Tests:                   `python3 -m pip install pytest && python3 -m pytest`
 
 ## Conventions

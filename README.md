@@ -1,5 +1,13 @@
 # Vega Veto
 
+Two paper-trading desks, fake money only:
+
+- **Stock desk** (`stock_desk/`, `stock_run.py`): day-trades liquid US stocks
+  in an Alpaca **paper** account on GitHub's servers every trading day, and
+  posts P&L updates to your phone. [Jump to it](#stock-desk-us-stocks-alpaca-paper).
+- **Solana desk** (below): memecoins on live DexScreener data, with the
+  Signal Iris dashboard.
+
 **Solana Paper Desk · Signal Iris**
 
 A 24/7 memecoin **paper trading** desk with a live dashboard. Four agents scan
@@ -144,3 +152,47 @@ paper_trader/engine.py     the loop that ties it together
 paper_trader/server.py     local web server (127.0.0.1 only)
 dashboard/                 the Signal Iris UI (plain HTML/CSS/JS, no libraries)
 ```
+
+
+## Stock desk (US stocks, Alpaca paper)
+
+Four agents day-trade big, liquid US stocks (Apple, Nvidia, JPMorgan... plus
+the day's most-traded names) in an **Alpaca paper account**: real-time prices,
+Alpaca's order simulator, no real money. Each agent has a $25k slice of the
+account. Everything is sold 10 minutes before the close, so nothing is held
+overnight.
+
+| Agent | Buys when... |
+|---|---|
+| **OR · Opening Range** | price breaks above the first 15 minutes' high, volume running ahead of yesterday, above VWAP |
+| **MO · Momentum** | up ≥1.5% since the open, still climbing over the last 15 min, above VWAP, heavy volume |
+| **VR · VWAP Reversion** | down ≥2% on the day and ≥0.8% below VWAP, and starting to tick back up |
+| **GG · Gap & Go** | opened ≥2% above yesterday's close and is holding the gain, in the first 2 hours |
+
+**Risk rules** (`stock_desk/config.py`): $5k per trade, max 4 open per agent,
+no trades in the first 15 or last 30 minutes, spreads must be under 0.25%,
+stop loss −1.5%, take profit +3%, trailing stop, 2-hour time stop, and an
+agent that loses 3% of its budget in a day stops until tomorrow.
+
+### Setup (once)
+1. Sign up at alpaca.markets (free) and open the **Paper Trading** account.
+2. In the paper dashboard, generate **API keys** (a Key ID and a Secret).
+3. In this repo on GitHub: Settings → Secrets and variables → Actions →
+   New repository secret. Add `ALPACA_API_KEY_ID` and `ALPACA_API_SECRET_KEY`.
+
+After that, the **Stock desk** workflow runs by itself every weekday: a
+morning job waits for the opening bell, and an afternoon job takes over
+(GitHub stops jobs at 6 hours; a session is 6.5). Each day gets its own issue
+with an update every 5 minutes that @mentions you. To run it right now:
+Actions → Stock desk → Run workflow.
+
+**GitHub Actions minutes:** a full trading day uses roughly 400–470 minutes.
+Private repos get 2,000 free minutes a month (about 4–5 trading days), and
+by default GitHub then *stops* the jobs rather than charging you. Public
+repos get unlimited free minutes; your keys stay secret either way. To use
+fewer minutes, turn off the schedule and run it manually on the days you want.
+
+Honest limits: Alpaca's paper fills don't model market impact or queue
+position, though at $5k per trade in these stocks that's small. The free IEX
+data feed only sees part of the market's volume, so volume numbers are
+compared with each other, not with market totals.

@@ -1,0 +1,46 @@
+# Paper-trades US stocks in your Alpaca PAPER account on every trading day,
+# posting a P&L update to a daily issue every few minutes (you're @mentioned,
+# so the GitHub app notifies you).
+#
+# Needs two repository secrets (Settings -> Secrets and variables -> Actions):
+#   ALPACA_API_KEY_ID      and      ALPACA_API_SECRET_KEY    (paper keys)
+#
+# A session is 6.5 h but a GitHub job may run 6 h, so two jobs run each day.
+# The concurrency group makes the afternoon job wait for the morning one.
+name: Stock desk
+
+on:
+  schedule:
+    - cron: "20 13 * * 1-5"   # morning: waits for the 09:30 New York open, runs ~5.8 h
+    - cron: "55 18 * * 1-5"   # afternoon: takes over and runs to the close
+  workflow_dispatch:
+    inputs:
+      every:
+        description: "Minutes between updates"
+        default: "5"
+
+concurrency:
+  group: stock-desk
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  desk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run stock desk
+        env:
+          ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+          ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTIFY_USER: ${{ github.repository_owner }}
+          PYTHONUNBUFFERED: "1"
+        run: python3 stock_run.py --every "${{ inputs.every || '5' }}"
