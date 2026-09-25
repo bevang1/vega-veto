@@ -37,7 +37,9 @@ def main() -> None:
     threading.Thread(target=engine.run_forever, daemon=True).start()
     server = serve(engine, args.port)
     url = f"http://127.0.0.1:{args.port}"
-    print(f"Paper desk running on {feed.name}\nDashboard: {url}\nCtrl+C to stop.")
+    mode = ("LIVE: real Solana tokens and prices, fake money" if feed.is_live
+            else "DEMO: invented coins, results mean nothing (drop --demo for live)")
+    print(f"Paper desk running on {feed.name}\nMode: {mode}\nDashboard: {url}\nCtrl+C to stop.")
     if not args.no_browser:
         webbrowser.open(url)
     try:
