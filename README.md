@@ -20,28 +20,23 @@ git clone https://github.com/bevang1/vega-veto.git
 cd vega-veto
 ```
 
-Simulated market, to learn the dashboard (works offline):
-
-```bash
-python3 run.py --demo
-```
-
-Live Solana market data from DexScreener, still fake money:
-
-```bash
-python3 run.py
-```
-
-Run one at a time: each keeps running until you press `Ctrl+C`. (The Mac
-Terminal doesn't treat `# ...` as a comment when pasted, so these blocks
-have none.)
-
-The dashboard opens at <http://127.0.0.1:8765>. To leave it running
-overnight without the Mac sleeping:
+**Run it.** Real Solana tokens, real live prices, fake money. `caffeinate`
+keeps the Mac awake so it can run overnight:
 
 ```bash
 caffeinate -i python3 run.py
 ```
+
+The dashboard opens at <http://127.0.0.1:8765>. The top-right badge should
+read **LIVE DATA · PAPER MONEY** (green). It keeps running until you press
+`Ctrl+C`.
+
+Optional, **offline practice only**: `python3 run.py --demo` runs an *invented*
+market with made-up coins (badge: SIMULATED MARKET, amber). Its results say
+nothing about real markets, so don't judge any strategy on it.
+
+(The Mac Terminal doesn't treat `# ...` as a comment when pasted, so these
+command blocks have none.)
 
 Stop with `Ctrl+C`. Every event is kept in `data/paper_trades.db`.
 
