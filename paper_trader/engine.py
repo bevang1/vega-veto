@@ -44,6 +44,8 @@ class Engine:
         self.started_wall = time.time()
         self.started_market = None
         self.snaps: dict = {}
+        self.valuation: dict = {}   # snaps + last good reading for held tokens that went missing
+        self.last_good: dict = {}   # address -> most recent complete snapshot
         self.feats: dict = {}
         self.events: deque = deque(maxlen=300)
         self.equity_hist = {a.name: deque(maxlen=720) for a in self.agents}
@@ -69,7 +71,19 @@ class Engine:
     def tick(self) -> None:
         held = {addr for acct in self.broker.accounts.values() for addr in acct.positions}
         held |= {o.address for o in self.broker.pending}
-        snaps = self.feed.poll(keep=held)
+        raw = self.feed.poll(keep=held)
+        # Only trust complete readings. DexScreener sometimes omits a pool's
+        # liquidity or drops a token from one response; that's a gap in the
+        # data, not a real price of zero.
+        snaps = {a: s for a, s in raw.items() if s.price_usd > 0 and s.liquidity_usd > 0}
+        self.last_good.update(snaps)
+        # To VALUE what we hold, fall back to the last good reading during a
+        # gap, so a hiccup doesn't show as a 100% loss or trip the kill switch.
+        # (Exits still see the gap: a token missing for ~1 min is exited.)
+        valuation = dict(snaps)
+        for addr in held:
+            if addr not in valuation and addr in self.last_good:
+                valuation[addr] = self.last_good[addr]
         now, sol = self.feed.now(), self.feed.sol_usd
         if self.started_market is None:
             self.started_market = now
@@ -90,7 +104,7 @@ class Engine:
             acct = self.broker.accounts[agent.name]
             lim = limits_for(self.limits, agent.exits)
             self._exits(agent, acct, snaps, now, lim)
-            equity = acct.equity_sol(snaps, sol)
+            equity = acct.equity_sol(valuation, sol)
             acct.peak_equity_sol = max(acct.peak_equity_sol, equity)
             if not acct.killed and equity < acct.peak_equity_sol * (1 - lim.kill_switch_drawdown):
                 self._kill(agent, f"equity fell {1 - equity / acct.peak_equity_sol:.0%} from its peak")
@@ -104,7 +118,7 @@ class Engine:
         self.flow_hist.append((now, buy_usd, sum(s.vol_m5 for s in snaps.values()) - buy_usd))
 
         self.store.commit()
-        self.snaps, self.feats = snaps, feats
+        self.snaps, self.feats, self.valuation = snaps, feats, valuation
         self.tick_count += 1
         with self.lock:
             self._state = self._build_state(sol, now)
@@ -211,7 +225,7 @@ class Engine:
                 "equity_hist": [round(v, 5) for _, v in list(self.equity_hist[agent.name])[::2]],
             })
             for p in acct.positions.values():
-                snap = self.snaps.get(p.address)
+                snap = self.valuation.get(p.address)
                 value = quote_sell(p.tokens, snap, sol)["sol_out"]
                 positions.append({
                     "agent": agent.name, "color": agent.color, "symbol": p.symbol,
@@ -221,6 +235,7 @@ class Engine:
                     "minutes": (now - p.opened_at) / 60,
                     "entry_price": p.entry_price_usd,
                     "price": snap.price_usd if snap else None,
+                    "stale": p.address not in self.snaps,   # valued at last good reading
                 })
 
         held_by: dict = {}

@@ -61,3 +61,35 @@ def test_engine_runs_and_accounting_holds():
         assert len(acct.positions) <= engine.limits.max_open_positions
     kinds = {e["kind"] for e in engine.events}
     assert "BUY" in kinds and "SELL" in kinds
+
+
+class GappyFeed:
+    """Replays one token, then drops it (or blanks its liquidity) for a tick."""
+    name, is_live, tick_seconds, status, sol_usd = "test", True, 0, "ok", 150.0
+
+    def __init__(self, frames):
+        self.frames, self.t = frames, 1_700_000_000.0
+
+    def now(self):
+        return self.t
+
+    def poll(self, keep=frozenset()):
+        self.t += 10
+        return self.frames.pop(0) if self.frames else {}
+
+
+def test_data_gap_is_not_a_100_percent_loss():
+    from paper_trader.models import Position
+    good = TokenSnapshot.from_dexscreener(PAIR)
+    blank = TokenSnapshot.from_dexscreener(dict(PAIR, liquidity={}))   # liquidity omitted
+    engine = Engine(GappyFeed([{"MEME": good}, {"MEME": blank}, {}]), Store(None))
+    acct = engine.broker.accounts["MOMENTUM"]
+    acct.cash_sol -= 1.0
+    acct.positions["MEME"] = Position("MOMENTUM", "MEME", "MEME", tokens=1.0 * 150 / 0.0015,
+                                      cost_sol=1.0, entry_price_usd=0.0015, entry_liquidity_usd=80000,
+                                      opened_at=engine.feed.t, entry_reason="test", peak_price_usd=0.0015)
+    for _ in range(3):
+        engine.tick()
+        mo = next(a for a in engine.state()["agents"] if a["name"] == "MOMENTUM")
+        assert mo["pnl_pct"] > -3, "a gap in the data must not show as a big loss"
+        assert not mo["killed"]

@@ -27,6 +27,10 @@ from dataclasses import dataclass, field
 from . import config
 from .models import Order, Position, TokenSnapshot
 
+# A sell can't fill against missing data. Wait this many updates (~1 min
+# live) for the token to reappear before treating it as unsellable (worth 0).
+SELL_WAIT_TICKS = 6
+
 
 def amm_out_usd(in_usd: float, liquidity_usd: float) -> float:
     """USD value received for swapping `in_usd` into a constant-product pool.
@@ -119,6 +123,9 @@ class PaperBroker:
             if o.side == "BUY":
                 acct.reserved_sol -= o.sol_amount
                 fills.append(self._fill_buy(acct, o, snap, sol_usd, now))
+            elif snap is None and o.retries < SELL_WAIT_TICKS:
+                o.retries += 1
+                self.pending.append(o)   # data gap: try again next update
             else:
                 fills.append(self._fill_sell(acct, o, snap, sol_usd, now))
         return [f for f in fills if f]

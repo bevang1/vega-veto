@@ -65,3 +65,27 @@ def test_buy_of_vanished_token_is_refunded():
     fills = b.fill_pending({}, sol_usd=150, now=0)
     assert fills[0]["kind"] == "BUY_FAILED"
     assert math.isclose(b.accounts["A"].cash_sol, config.STARTING_SOL_PER_AGENT)
+
+
+def test_sell_waits_through_a_data_gap_then_fills():
+    from paper_trader.broker import SELL_WAIT_TICKS
+    b = PaperBroker(["A"])
+    b.submit(Order("A", "BUY", "TOKEN", "TST", sol_amount=1.0))
+    b.fill_pending({"TOKEN": snap()}, sol_usd=150, now=0)
+    b.submit(Order("A", "SELL", "TOKEN", "TST"))
+    for _ in range(SELL_WAIT_TICKS - 1):
+        assert b.fill_pending({}, sol_usd=150, now=0) == []   # token missing: keep waiting
+    fills = b.fill_pending({"TOKEN": snap()}, sol_usd=150, now=0)  # data is back
+    assert fills[0]["kind"] == "SELL" and fills[0]["quote"]["sol_out"] > 0.95
+
+
+def test_sell_of_token_gone_for_good_is_written_off():
+    from paper_trader.broker import SELL_WAIT_TICKS
+    b = PaperBroker(["A"])
+    b.submit(Order("A", "BUY", "TOKEN", "TST", sol_amount=1.0))
+    b.fill_pending({"TOKEN": snap()}, sol_usd=150, now=0)
+    b.submit(Order("A", "SELL", "TOKEN", "TST"))
+    fills = []
+    for _ in range(SELL_WAIT_TICKS + 1):
+        fills += b.fill_pending({}, sol_usd=150, now=0)
+    assert fills[0]["pnl_sol"] < -0.99

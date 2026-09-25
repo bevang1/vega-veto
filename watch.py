@@ -100,7 +100,8 @@ def report(engine: Engine, since_event_id: int, number: int, started: float, men
                      + (f" +{len(buys) - 20} more" if len(buys) > 20 else ""))
     if st["positions"]:
         lines += ["", "**Open now:** " + ", ".join(
-            f"{p['symbol']} ({p['agent'][:2]}) {p['pnl_pct']:+.1f}%" for p in st["positions"])]
+            f"{p['symbol']} ({p['agent'][:2]}) {p['pnl_pct']:+.1f}%{' (data gap)' if p.get('stale') else ''}"
+            for p in st["positions"])]
     lines += ["", "_Paper money only. Values are what selling now would return, after fees and price impact._"]
     return "\n".join(lines)
 

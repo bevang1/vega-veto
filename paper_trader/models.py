@@ -107,3 +107,4 @@ class Order:
     details: dict = field(default_factory=dict)
     submitted_at: float = 0.0
     decision_price_usd: float = 0.0
+    retries: int = 0            # updates a sell has waited for the token's data to come back
