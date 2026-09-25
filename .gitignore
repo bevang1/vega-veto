@@ -1,0 +1,4 @@
+# Local trade history: every run appends here
+data/*.db
+__pycache__/
+.pytest_cache/

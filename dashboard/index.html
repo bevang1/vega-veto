@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Signal Iris · Paper Desk</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- ============ TOP BAR ============ -->
+  <header class="top">
+    <div class="row row1">
+      <div class="brand"><span class="bar">|</span> SOLANA PAPER DESK <span class="dim">/ SIGNAL IRIS</span> <span class="dim2">// FAKE MONEY ONLY</span></div>
+      <div class="meta" id="meta">CONNECTING…</div>
+    </div>
+    <div class="row row2">
+      <div class="label dim">AGENT FILTER</div>
+      <div class="chips" id="agentChips"></div>
+      <div class="spacer"></div>
+      <div id="modeBadge" class="mode">—</div>
+      <button class="ctl" id="pauseBtn" title="Stop opening new positions. Exits keep running.">PAUSE</button>
+      <button class="ctl danger" id="killBtn" title="Sell everything and stop all agents.">KILL ALL</button>
+    </div>
+    <div class="row row3" id="strip">—</div>
+  </header>
+
+  <main class="grid">
+    <!-- ============ LEFT: WHAT'S HAPPENING (accordion) ============ -->
+    <aside class="side left">
+      <section class="acc open" data-sec="positions">
+        <button class="acc-head"><span>OPEN POSITIONS</span><span class="count" id="posCount">0</span></button>
+        <div class="acc-body" id="positions"></div>
+      </section>
+      <section class="acc open grow" data-sec="activity">
+        <button class="acc-head"><span>ACTIVITY · WHAT'S HAPPENING</span><span class="count" id="evCount">0</span></button>
+        <div class="acc-body">
+          <div class="pills" id="evFilter">
+            <button data-f="ALL" class="on">ALL</button><button data-f="BUY">BUYS</button>
+            <button data-f="SELL">SELLS</button><button data-f="BLOCKED">BLOCKED</button><button data-f="KILL">ALERTS</button>
+          </div>
+          <div id="events" class="events"></div>
+        </div>
+      </section>
+      <section class="acc" data-sec="how">
+        <button class="acc-head"><span>HOW THIS DESK WORKS</span><span class="count">?</span></button>
+        <div class="acc-body how">
+          <p><b>1 · Scan.</b> Every tick the desk pulls live prices, volume and buy/sell counts for promoted Solana tokens.</p>
+          <p><b>2 · Agents propose.</b> Four agents with different playbooks check each token against their own checklist. A fully ticked checklist = "I want to buy".</p>
+          <p><b>3 · Risk decides.</b> Hard rules can block any buy: thin liquidity, too young (sniper zone), too many open positions, recently sold, kill switch on.</p>
+          <p><b>4 · Paper fill.</b> The order fills on the <i>next</i> update, paying DEX fee, network fee and AMM price impact, the same costs a real swap pays.</p>
+          <p><b>5 · Exits.</b> Every open position is checked each tick: stop loss, take profit, trailing stop, time stop, and a rug check on liquidity.</p>
+          <p><b>6 · Kill switch.</b> An agent that loses 30% from its peak stops trading. KILL ALL does that for everyone.</p>
+          <p class="dim">Everything shown is fake money. Positions are valued at what you'd actually get selling now, after fees and impact.</p>
+        </div>
+      </section>
+    </aside>
+
+    <!-- ============ CENTER: THE IRIS ============ -->
+    <section class="center">
+      <div class="center-head">
+        <span class="dim">SIGNAL IRIS · </span><span id="irisCount">0</span><span class="dim"> TOKENS · STRAND LENGTH = SIGNAL SCORE · HOVER FOR DETAIL</span>
+      </div>
+      <canvas id="iris"></canvas>
+      <div class="legend">
+        <div><i class="sw buy"></i>BUYERS DOMINATE</div>
+        <div><i class="sw neu"></i>BALANCED</div>
+        <div><i class="sw sell"></i>SELLERS DOMINATE</div>
+        <div><i class="sw held"></i>HELD BY AN AGENT (AGENT COLOUR + BADGE)</div>
+      </div>
+      <div id="tip" class="tip"></div>
+    </section>
+
+    <!-- ============ RIGHT: AGENTS + READOUT ============ -->
+    <aside class="side right">
+      <div class="hero">
+        <div class="dim label">DESK EQUITY (ALL AGENTS)</div>
+        <div class="big" id="heroEq">—</div>
+        <div id="heroSub" class="dim">—</div>
+      </div>
+      <div id="agents"></div>
+      <div class="panel-title">READOUT</div>
+      <div class="readout" id="readout"></div>
+    </aside>
+  </main>
+
+  <!-- ============ BOTTOM ============ -->
+  <footer class="bottom">
+    <div class="panel flow">
+      <div class="panel-title"><span>MARKET FLOW · NET BUY − SELL VOLUME (5M)</span><span id="flowNow" class="dim"></span></div>
+      <canvas id="flow"></canvas>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><span>EXIT REASONS · PARETO</span><span id="exitTotal" class="dim"></span></div>
+      <canvas id="pareto"></canvas>
+    </div>
+    <div class="panel">
+      <div class="panel-title"><span>P&amp;L BY AGENT (SOL)</span><span class="dim">AFTER ALL COSTS</span></div>
+      <canvas id="pnl"></canvas>
+    </div>
+  </footer>
+
+  <div id="chartTip" class="tip small"></div>
+  <script src="app.js"></script>
+</body>
+</html>
