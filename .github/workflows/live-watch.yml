@@ -1,0 +1,35 @@
+# Runs the desk on LIVE Solana data (paper money) on GitHub's servers and
+# posts a P&L update to a new issue every few minutes, @mentioning you so the
+# GitHub mobile app notifies you. Start it from the Actions tab:
+# "Live paper watch" -> "Run workflow".
+name: Live paper watch
+
+on:
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "How long to run (max ~5.8; GitHub stops jobs at 6 h)"
+        default: "5.5"
+      every:
+        description: "Minutes between updates"
+        default: "5"
+
+permissions:
+  issues: write      # to open the run's issue and post updates
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run desk and post updates
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTIFY_USER: ${{ github.repository_owner }}
+          PYTHONUNBUFFERED: "1"
+        run: python3 watch.py --hours "${{ inputs.hours }}" --every "${{ inputs.every }}"
