@@ -13,12 +13,28 @@ strategy makes money **after realistic costs**, before a cent is at risk.
 
 No installs needed: it's Python standard library only.
 
+Download it (once):
+
 ```bash
 git clone https://github.com/bevang1/vega-veto.git
 cd vega-veto
-python3 run.py --demo     # simulated market: learn the dashboard, works offline
-python3 run.py            # LIVE Solana market data from DexScreener, fake money
 ```
+
+Simulated market, to learn the dashboard (works offline):
+
+```bash
+python3 run.py --demo
+```
+
+Live Solana market data from DexScreener, still fake money:
+
+```bash
+python3 run.py
+```
+
+Run one at a time: each keeps running until you press `Ctrl+C`. (The Mac
+Terminal doesn't treat `# ...` as a comment when pasted, so these blocks
+have none.)
 
 The dashboard opens at <http://127.0.0.1:8765>. To leave it running
 overnight without the Mac sleeping:
