@@ -6,7 +6,7 @@ used (limits from https://docs.dexscreener.com/api/reference):
   GET /token-boosts/latest/v1      tokens recently promoted on DexScreener  (60 req/min)
   GET /token-boosts/top/v1         tokens with the most active promotion   (60 req/min)
   GET /token-profiles/latest/v1    tokens that recently set up a profile   (60 req/min)
-  GET /latest/dex/tokens/{a,b,..}  live pair data, up to 30 tokens a call  (300 req/min)
+  GET /latest/dex/tokens/{a,b,..}  live pair data for several tokens      (300 req/min)
 
 Note what "discovery" means here: boosted/profiled tokens are ones someone
 PAID to promote. That's where attention is, and it's also where a lot of
@@ -87,24 +87,38 @@ class DexScreenerFeed:
             self.discover(set(keep))
         self._tick += 1
 
-        addresses = [SOL_MINT] + [a for a in self.tracked if a != SOL_MINT]
+        # SOL gets its own request. It trades in hundreds of pools, and the
+        # response has a cap on how many pairs it returns, so batching SOL
+        # with other tokens crowded them out of the reply entirely.
+        sol_pairs = (self._get("/latest/dex/tokens/" + SOL_MINT) or {}).get("pairs") or []
+        sol_pairs = [p for p in sol_pairs if (p.get("baseToken") or {}).get("address") == SOL_MINT
+                     and (p.get("quoteToken") or {}).get("symbol") in ("USDC", "USDT")]
+        if sol_pairs:
+            deepest = max(sol_pairs, key=lambda p: (p.get("liquidity") or {}).get("usd") or 0)
+            self.sol_usd = float(deepest.get("priceUsd") or self.sol_usd)
+
+        # Small batches so each reply stays well under that pair cap, even for
+        # tokens trading in several pools. Held tokens go first (tracked keeps
+        # them at the front), so they're the least likely to be missed.
+        addresses = [a for a in self.tracked if a != SOL_MINT]
         best: dict[str, dict] = {}
-        for i in range(0, len(addresses), 30):
-            data = self._get("/latest/dex/tokens/" + ",".join(addresses[i:i + 30])) or {}
+        step = config.TOKENS_PER_REQUEST
+        for i in range(0, len(addresses), step):
+            batch = addresses[i:i + step]
+            data = self._get("/latest/dex/tokens/" + ",".join(batch)) or {}
             for pair in data.get("pairs") or []:
-                if pair.get("chainId") != "solana":
-                    continue
                 addr = (pair.get("baseToken") or {}).get("address")
+                # Only pools where one of OUR tokens is the thing being traded.
+                if pair.get("chainId") != "solana" or addr not in batch:
+                    continue
                 liq = ((pair.get("liquidity") or {}).get("usd")) or 0
                 # A token can trade in several pools; use the deepest one,
                 # since that's where a real swap router would send most of it.
                 if addr and liq >= ((best.get(addr) or {}).get("liquidity") or {}).get("usd", -1):
                     best[addr] = pair
 
-        sol_pair = best.pop(SOL_MINT, None)
-        if sol_pair:
-            self.sol_usd = float(sol_pair.get("priceUsd") or self.sol_usd)
         snapshots = {a: TokenSnapshot.from_dexscreener(p) for a, p in best.items()}
         if snapshots:
-            self.status = f"ok: {len(snapshots)} tokens"
+            # "N of M" shows coverage: a big gap means data is going missing.
+            self.status = f"ok: {len(snapshots)} of {len(addresses)} tokens"
         return snapshots

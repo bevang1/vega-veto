@@ -36,7 +36,8 @@ def test_parse_tolerates_missing_fields():
 def test_live_feed_poll_with_fake_http():
     feed = DexScreenerFeed()
     shallow = dict(PAIR, pairAddress="pair2", liquidity={"usd": 1000})
-    sol = dict(PAIR, baseToken={"address": SOL_MINT, "symbol": "SOL"}, priceUsd="150.5")
+    sol = dict(PAIR, baseToken={"address": SOL_MINT, "symbol": "SOL"}, priceUsd="150.5",
+               quoteToken={"address": "USDC", "symbol": "USDC"})
 
     def fake_get(path):
         if path.startswith("/token-"):
@@ -93,3 +94,28 @@ def test_data_gap_is_not_a_100_percent_loss():
         mo = next(a for a in engine.state()["agents"] if a["name"] == "MOMENTUM")
         assert mo["pnl_pct"] > -3, "a gap in the data must not show as a big loss"
         assert not mo["killed"]
+
+
+def test_sol_and_busy_tokens_dont_crowd_others_out_of_the_reply():
+    # Mimic the real API returning at most 30 pairs per reply, with SOL
+    # trading in 50 pools. Every tracked token must still come back.
+    feed = DexScreenerFeed()
+    tokens = [f"T{i}" for i in range(25)]
+    feed.discover = lambda keep: None
+    feed.tracked = tokens
+    sol_pairs = [dict(PAIR, pairAddress=f"sol{i}", priceUsd="150.5",
+                      baseToken={"address": SOL_MINT, "symbol": "SOL"},
+                      quoteToken={"symbol": "USDC"}) for i in range(50)]
+
+    def capped_get(path):
+        asked = path.rsplit("/", 1)[-1].split(",")
+        pairs = []
+        for a in asked:
+            pairs += sol_pairs if a == SOL_MINT else [
+                dict(PAIR, pairAddress=f"{a}-{k}", baseToken={"address": a, "symbol": a}) for k in range(2)]
+        return {"pairs": pairs[:30]}
+
+    feed._get = capped_get
+    snaps = feed.poll()
+    assert feed.sol_usd == 150.5
+    assert sorted(snaps) == sorted(tokens)

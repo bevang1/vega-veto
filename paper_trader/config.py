@@ -22,7 +22,8 @@ NETWORK_FEE_SOL = 0.0005  # ESTIMATE: base fee + priority fee per transaction wh
 # --- Polling ------------------------------------------------------------------
 LIVE_TICK_SECONDS = 10          # how often we pull fresh prices (DexScreener limit: 300 req/min)
 DISCOVERY_EVERY_TICKS = 6       # look for new tokens every 6 ticks (~1 min; limit is 60 req/min)
-MAX_TRACKED_TOKENS = 90         # 3 batched requests of 30 per tick
+MAX_TRACKED_TOKENS = 90
+TOKENS_PER_REQUEST = 10         # 9 price requests + 1 for SOL per tick = ~60/min (limit 300)
 DEMO_TICK_SECONDS = 1.5         # demo mode runs faster than real time...
 DEMO_SIM_SECONDS_PER_TICK = 10  # ...but each tick still represents 10 market seconds
 
