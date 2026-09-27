@@ -1,16 +1,16 @@
 """
-The live market feed: real Solana token data from DexScreener's public API.
+The live market feed: real crypto prices from Coinbase's public market data API.
 
-No API key and no wallet are needed; it's read-only market data. Endpoints
-used (limits from https://docs.dexscreener.com/api/reference):
-  GET /token-boosts/latest/v1      tokens recently promoted on DexScreener  (60 req/min)
-  GET /token-boosts/top/v1         tokens with the most active promotion   (60 req/min)
-  GET /token-profiles/latest/v1    tokens that recently set up a profile   (60 req/min)
-  GET /latest/dex/tokens/{a,b,..}  live pair data for several tokens      (300 req/min)
+No API key and no account are needed; it's read-only market data, and it
+works from the US (unlike Binance's global API). Endpoints used, per coin
+(docs: https://docs.cdp.coinbase.com/exchange/reference):
+  GET /products/{BTC-USD}/ticker                   last price, best bid/ask, 24h volume
+  GET /products/{BTC-USD}/candles?granularity=60   the last 300 one-minute candles
+  GET /products/{BTC-USD}/stats                    24h open/high/low (for the 24h change)
 
-Note what "discovery" means here: boosted/profiled tokens are ones someone
-PAID to promote. That's where attention is, and it's also where a lot of
-the scams are. The risk engine exists for exactly that reason.
+We trade a fixed list of major coins (config.UNIVERSE) rather than
+"discovering" whatever is being promoted. That's a deliberate choice: deep,
+liquid markets where the price you see is close to the price you get.
 """
 
 from __future__ import annotations
@@ -22,21 +22,20 @@ import urllib.error
 import urllib.request
 
 from . import config
-from .models import TokenSnapshot
+from .models import AssetSnapshot, Candle
 
-API = "https://api.dexscreener.com"
-SOL_MINT = "So11111111111111111111111111111111111111112"  # wrapped SOL
-DISCOVERY_PATHS = ["/token-boosts/latest/v1", "/token-boosts/top/v1", "/token-profiles/latest/v1"]
+API = "https://api.exchange.coinbase.com"
 
 
-class DexScreenerFeed:
-    name = "DexScreener (live Solana data)"
+class CoinbaseFeed:
+    name = "Coinbase (live crypto data)"
     is_live = True
     tick_seconds = config.LIVE_TICK_SECONDS
 
-    def __init__(self) -> None:
-        self.tracked: list[str] = []      # token addresses we poll, newest first
-        self.sol_usd = 0.0
+    def __init__(self, symbols: list[str] | None = None) -> None:
+        self.products = [f"{s}-{config.QUOTE_CURRENCY}" for s in (symbols or config.UNIVERSE)]
+        self.candles: dict[str, list[Candle]] = {}
+        self.stats: dict[str, dict] = {}
         self.status = "starting"
         self._tick = 0
 
@@ -45,14 +44,15 @@ class DexScreenerFeed:
 
     # --- HTTP -----------------------------------------------------------------
     def _get(self, path: str):
-        req = urllib.request.Request(API + path, headers={"User-Agent": "paper-trader/1.0"})
+        # Coinbase rejects requests that don't send a User-Agent.
+        req = urllib.request.Request(API + path, headers={"User-Agent": "vega-veto-paper-desk/2.0"})
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return json.loads(resp.read())
         except urllib.error.HTTPError as e:
             if e.code == 429:
-                self.status = "rate limited by DexScreener: backing off"
-                time.sleep(15)
+                self.status = "rate limited by Coinbase: backing off"
+                time.sleep(5)
             else:
                 self.status = f"HTTP {e.code} from {path}"
         except (urllib.error.URLError, ssl.SSLError) as e:
@@ -66,59 +66,28 @@ class DexScreenerFeed:
             self.status = f"bad response: {e}"
         return None
 
-    # --- Discovery ------------------------------------------------------------
-    def discover(self, keep: set[str]) -> None:
-        """Add newly promoted Solana tokens; drop the oldest beyond the cap."""
-        found: list[str] = []
-        for path in DISCOVERY_PATHS:
-            items = self._get(path) or []
-            for item in items if isinstance(items, list) else []:
-                if item.get("chainId") == "solana" and item.get("tokenAddress"):
-                    found.append(item["tokenAddress"])
-        merged = list(dict.fromkeys(found + self.tracked))  # dedupe, keep order
-        # Tokens we hold are never dropped, or we'd lose track of our own bags.
-        must = [a for a in merged if a in keep]
-        rest = [a for a in merged if a not in keep]
-        self.tracked = must + rest[: max(0, config.MAX_TRACKED_TOKENS - len(must))]
-
     # --- Pricing --------------------------------------------------------------
-    def poll(self, keep: set[str] = frozenset()) -> dict[str, TokenSnapshot]:
-        if self._tick % config.DISCOVERY_EVERY_TICKS == 0:
-            self.discover(set(keep))
+    def poll(self, keep: set[str] = frozenset()) -> dict[str, AssetSnapshot]:
+        refresh_stats = self._tick % config.STATS_EVERY_TICKS == 0
         self._tick += 1
-
-        # SOL gets its own request. It trades in hundreds of pools, and the
-        # response has a cap on how many pairs it returns, so batching SOL
-        # with other tokens crowded them out of the reply entirely.
-        sol_pairs = (self._get("/latest/dex/tokens/" + SOL_MINT) or {}).get("pairs") or []
-        sol_pairs = [p for p in sol_pairs if (p.get("baseToken") or {}).get("address") == SOL_MINT
-                     and (p.get("quoteToken") or {}).get("symbol") in ("USDC", "USDT")]
-        if sol_pairs:
-            deepest = max(sol_pairs, key=lambda p: (p.get("liquidity") or {}).get("usd") or 0)
-            self.sol_usd = float(deepest.get("priceUsd") or self.sol_usd)
-
-        # Small batches so each reply stays well under that pair cap, even for
-        # tokens trading in several pools. Held tokens go first (tracked keeps
-        # them at the front), so they're the least likely to be missed.
-        addresses = [a for a in self.tracked if a != SOL_MINT]
-        best: dict[str, dict] = {}
-        step = config.TOKENS_PER_REQUEST
-        for i in range(0, len(addresses), step):
-            batch = addresses[i:i + step]
-            data = self._get("/latest/dex/tokens/" + ",".join(batch)) or {}
-            for pair in data.get("pairs") or []:
-                addr = (pair.get("baseToken") or {}).get("address")
-                # Only pools where one of OUR tokens is the thing being traded.
-                if pair.get("chainId") != "solana" or addr not in batch:
-                    continue
-                liq = ((pair.get("liquidity") or {}).get("usd")) or 0
-                # A token can trade in several pools; use the deepest one,
-                # since that's where a real swap router would send most of it.
-                if addr and liq >= ((best.get(addr) or {}).get("liquidity") or {}).get("usd", -1):
-                    best[addr] = pair
-
-        snapshots = {a: TokenSnapshot.from_dexscreener(p) for a, p in best.items()}
-        if snapshots:
-            # "N of M" shows coverage: a big gap means data is going missing.
-            self.status = f"ok: {len(snapshots)} of {len(addresses)} tokens"
-        return snapshots
+        snaps: dict[str, AssetSnapshot] = {}
+        for pid in self.products:
+            rows = self._get(f"/products/{pid}/candles?granularity=60")
+            if isinstance(rows, list) and rows:
+                # Newest first from the API; we keep them oldest first.
+                parsed = sorted((Candle.from_coinbase(r) for r in rows if len(r) >= 6), key=lambda c: c.t)
+                self.candles[pid] = parsed[-config.HISTORY_MINUTES:]
+            if refresh_stats or pid not in self.stats:
+                stats = self._get(f"/products/{pid}/stats")
+                if isinstance(stats, dict):
+                    self.stats[pid] = stats
+            ticker = self._get(f"/products/{pid}/ticker")
+            if not isinstance(ticker, dict):
+                continue
+            snap = AssetSnapshot.from_coinbase(pid, ticker, self.stats.get(pid), self.candles.get(pid, []))
+            if snap.price_usd > 0:
+                snaps[snap.symbol] = snap
+        if snaps:
+            # "N of M" shows coverage: a gap means data is going missing.
+            self.status = f"ok: {len(snaps)} of {len(self.products)} coins"
+        return snaps

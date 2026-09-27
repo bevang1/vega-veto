@@ -1,9 +1,10 @@
 """
 The shapes of data that flow through the desk.
 
-A TokenSnapshot is one reading of one token's market at one moment. Both the
-live feed (DexScreener) and the demo feed produce these, so everything
-downstream works the same whichever feed is plugged in.
+An AssetSnapshot is one reading of one coin's market at one moment: the
+live price, the order book's best bid and ask, 24h volume, and the recent
+one-minute candles. Both the live feed (Coinbase) and the demo feed produce
+these, so everything downstream works the same whichever feed is plugged in.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from dataclasses import dataclass, field
 
 
 def _num(value, default: float = 0.0) -> float:
-    """DexScreener sends some numbers as strings and omits others. Be forgiving."""
+    """Exchanges send some numbers as strings and omit others. Be forgiving."""
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -20,79 +21,72 @@ def _num(value, default: float = 0.0) -> float:
 
 
 @dataclass
-class TokenSnapshot:
-    address: str
-    symbol: str
-    name: str
-    pair_address: str
-    dex: str
-    url: str
-    price_usd: float
-    liquidity_usd: float
-    market_cap: float
-    created_at_ms: float        # when the trading pair was created
-    vol_m5: float               # USD volume, last 5 minutes
-    vol_h1: float               # USD volume, last hour
-    vol_h24: float
-    buys_m5: int                # number of buy transactions, last 5 minutes
-    sells_m5: int
-    buys_h1: int
-    sells_h1: int
-    chg_m5: float               # % price change, last 5 minutes
-    chg_h1: float
-    chg_h24: float
-    quote_symbol: str = "SOL"
-    price_native: float = 0.0   # price in the quote token (SOL for most memecoin pairs)
+class Candle:
+    """One minute of trading: where price opened, went, and closed, and how much traded."""
+    t: float          # start of the minute (unix seconds)
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float     # in coins (e.g. BTC), not dollars
 
     @classmethod
-    def from_dexscreener(cls, pair: dict) -> "TokenSnapshot":
-        base = pair.get("baseToken") or {}
-        quote = pair.get("quoteToken") or {}
-        txns = pair.get("txns") or {}
-        volume = pair.get("volume") or {}
-        change = pair.get("priceChange") or {}
-        liquidity = pair.get("liquidity") or {}
-        m5, h1 = txns.get("m5") or {}, txns.get("h1") or {}
+    def from_coinbase(cls, row) -> "Candle":
+        # Coinbase sends each candle as [time, low, high, open, close, volume].
+        t, low, high, open_, close, volume = (_num(x) for x in row[:6])
+        return cls(t=t, open=open_, high=high, low=low, close=close, volume=volume)
+
+
+@dataclass
+class AssetSnapshot:
+    symbol: str                 # "BTC"
+    product_id: str             # "BTC-USD": the order book it trades on
+    name: str
+    url: str
+    price_usd: float            # last traded price
+    bid: float                  # best price someone will BUY from you at (you sell here)
+    ask: float                  # best price someone will SELL to you at (you buy here)
+    volume_24h_usd: float
+    chg_24h: float              # % price change over 24 hours
+    candles: list[Candle] = field(default_factory=list)   # 1-minute, oldest first
+
+    @property
+    def spread_pct(self) -> float:
+        """The gap between bid and ask, as % of price. A round trip pays it once."""
+        if self.bid > 0 and self.ask > 0 and self.price_usd > 0:
+            return (self.ask - self.bid) / self.price_usd * 100
+        return 0.0
+
+    @classmethod
+    def from_coinbase(cls, product_id: str, ticker: dict, stats: dict | None,
+                      candles: list[Candle]) -> "AssetSnapshot":
+        symbol = product_id.split("-")[0]
+        price = _num(ticker.get("price"))
+        stats = stats or {}
+        opened = _num(stats.get("open"))
+        # Ticker volume is the last 24h in coins; convert it to dollars.
+        volume = _num(ticker.get("volume") or stats.get("volume"))
         return cls(
-            address=base.get("address", ""),
-            symbol=base.get("symbol", "?"),
-            name=base.get("name", ""),
-            pair_address=pair.get("pairAddress", ""),
-            dex=pair.get("dexId", ""),
-            url=pair.get("url", ""),
-            price_usd=_num(pair.get("priceUsd")),
-            price_native=_num(pair.get("priceNative")),
-            quote_symbol=quote.get("symbol", ""),
-            liquidity_usd=_num(liquidity.get("usd")),
-            market_cap=_num(pair.get("marketCap") or pair.get("fdv")),
-            created_at_ms=_num(pair.get("pairCreatedAt")),
-            vol_m5=_num(volume.get("m5")),
-            vol_h1=_num(volume.get("h1")),
-            vol_h24=_num(volume.get("h24")),
-            buys_m5=int(_num(m5.get("buys"))),
-            sells_m5=int(_num(m5.get("sells"))),
-            buys_h1=int(_num(h1.get("buys"))),
-            sells_h1=int(_num(h1.get("sells"))),
-            chg_m5=_num(change.get("m5")),
-            chg_h1=_num(change.get("h1")),
-            chg_h24=_num(change.get("h24")),
+            symbol=symbol, product_id=product_id, name=symbol,
+            url=f"https://www.coinbase.com/advanced-trade/spot/{product_id}",
+            price_usd=price, bid=_num(ticker.get("bid")), ask=_num(ticker.get("ask")),
+            volume_24h_usd=volume * price,
+            chg_24h=(price / opened - 1) * 100 if opened > 0 and price > 0 else 0.0,
+            candles=candles,
         )
 
 
 @dataclass
 class Position:
-    """A paper holding: which agent owns how many tokens, and what it cost."""
+    """A paper holding: which agent owns how many coins, and what it cost."""
     agent: str
-    address: str
     symbol: str
-    tokens: float
-    cost_sol: float             # everything spent, including fees
-    entry_price_usd: float      # the price we actually paid, after slippage
-    entry_liquidity_usd: float
+    qty: float                  # coins held
+    cost_usd: float             # everything spent, including fees
+    entry_price_usd: float      # the price we actually paid, after spread, impact and fees
     opened_at: float            # market time (seconds)
     entry_reason: str
     peak_price_usd: float = 0.0
-    missing_ticks: int = 0      # how many updates in a row the token was absent
 
 
 @dataclass
@@ -100,11 +94,9 @@ class Order:
     """An order waiting for the next market update to fill (simulated latency)."""
     agent: str
     side: str                   # "BUY" or "SELL"
-    address: str
     symbol: str
-    sol_amount: float = 0.0     # for buys: SOL to spend
+    usd_amount: float = 0.0     # for buys: dollars to spend
     reason: str = ""            # plain-English why, shown on the dashboard
     details: dict = field(default_factory=dict)
     submitted_at: float = 0.0
     decision_price_usd: float = 0.0
-    retries: int = 0            # updates a sell has waited for the token's data to come back

@@ -1,4 +1,4 @@
-# Runs the desk on LIVE Solana data (paper money) on GitHub's servers and
+# Runs the crypto desk on LIVE Coinbase prices (paper money) on GitHub's servers and
 # posts a P&L update to a new issue every few minutes, @mentioning you so the
 # GitHub mobile app notifies you. Start it from the Actions tab:
 # "Live paper watch" -> "Run workflow".

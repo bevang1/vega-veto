@@ -3,89 +3,74 @@
 import math
 
 from paper_trader import config
-from paper_trader.broker import PaperBroker, amm_out_usd, quote_buy, quote_sell
-from paper_trader.models import Order, TokenSnapshot
+from paper_trader.broker import PaperBroker, impact_fraction, quote_buy, quote_sell
+from paper_trader.models import AssetSnapshot, Candle, Order
 
 
-def snap(price=0.001, liq=100_000, address="TOKEN"):
-    return TokenSnapshot(address=address, symbol="TST", name="", pair_address="", dex="", url="",
-                         price_usd=price, liquidity_usd=liq, market_cap=0, created_at_ms=0,
-                         vol_m5=0, vol_h1=0, vol_h24=0, buys_m5=0, sells_m5=0, buys_h1=0,
-                         sells_h1=0, chg_m5=0, chg_h1=0, chg_h24=0)
+def snap(price=100.0, spread_pct=0.02, volume=50_000_000, symbol="ETH", candles=None):
+    half = price * spread_pct / 100 / 2
+    return AssetSnapshot(symbol=symbol, product_id=f"{symbol}-USD", name=symbol, url="",
+                         price_usd=price, bid=price - half, ask=price + half,
+                         volume_24h_usd=volume, chg_24h=0.0, candles=candles or [])
 
 
-def test_small_trade_has_almost_no_impact():
-    assert math.isclose(amm_out_usd(1, 1_000_000), 1, rel_tol=1e-5)
+def test_impact_grows_with_size_and_shrinks_with_volume():
+    assert impact_fraction(10_000, 1e8) > impact_fraction(1_000, 1e8)
+    assert impact_fraction(1_000, 1e9) < impact_fraction(1_000, 1e7)
 
 
-def test_trade_the_size_of_the_pool_side_gets_half():
-    # $50k into a $100k pool (so $50k per side): x*y=k gives half the value.
-    assert math.isclose(amm_out_usd(50_000, 100_000), 25_000)
-
-
-def test_bigger_trades_pay_more_impact():
-    s = snap()
-    assert quote_buy(10, s, 150)["impact_pct"] > quote_buy(1, s, 150)["impact_pct"]
+def test_buy_pays_the_ask_and_sell_gets_the_bid():
+    s = snap(spread_pct=0.2)
+    assert quote_buy(1_000, s)["fill_price_usd"] > s.ask
+    assert quote_sell(1, s)["fill_price_usd"] < s.bid
 
 
 def test_round_trip_at_unchanged_price_loses_money():
-    # Buy then immediately sell at the same price: fees + impact must cost you.
+    # Buy then immediately sell at the same price: fees, spread and impact must cost you.
     s = snap()
-    tokens = quote_buy(1.0, s, 150)["tokens"]
-    back = quote_sell(tokens, s, 150)["sol_out"]
-    assert back < 1.0
-    assert back > 0.98  # but not absurdly: ~0.5% fees + small impact + network fee
+    qty = quote_buy(1_000, s)["qty"]
+    back = quote_sell(qty, s)["usd_out"]
+    assert back < 1_000
+    # ...but not absurdly: two taker fees plus a small spread and impact.
+    assert back > 1_000 * (1 - 2 * config.TAKER_FEE) * 0.998
 
 
-def test_selling_into_a_rugged_pool_returns_almost_nothing():
-    tokens = quote_buy(1.0, snap(), 150)["tokens"]
-    rugged = snap(price=0.00001, liq=200)  # liquidity pulled, price collapses 99%
-    assert quote_sell(tokens, rugged, 150)["sol_out"] < 0.01
+def test_missing_bid_ask_falls_back_to_an_assumed_spread():
+    s = snap()
+    s.bid = s.ask = 0
+    assert quote_buy(1_000, s)["fill_price_usd"] > s.price_usd
+    assert quote_sell(1, s)["fill_price_usd"] < s.price_usd
 
 
 def test_orders_fill_on_the_next_update_at_the_new_price():
     b = PaperBroker(["A"])
-    b.submit(Order("A", "BUY", "TOKEN", "TST", sol_amount=1.0, decision_price_usd=0.001))
-    # Price jumped 10% before our order landed: we pay the new price.
-    fills = b.fill_pending({"TOKEN": snap(price=0.0011)}, sol_usd=150, now=0)
-    assert fills[0]["fill_price_usd"] > 0.0011
-    assert fills[0]["slippage_pct"] > 10
+    b.submit(Order("A", "BUY", "ETH", usd_amount=1_000, decision_price_usd=100))
+    # Price jumped 2% before our order landed: we pay the new price.
+    fills = b.fill_pending({"ETH": snap(price=102)}, now=0)
+    assert fills[0]["fill_price_usd"] > 102
+    assert fills[0]["slippage_pct"] > 2
 
 
 def test_pending_buy_still_counts_in_equity():
     b = PaperBroker(["A"])
-    b.submit(Order("A", "BUY", "TOKEN", "TST", sol_amount=1.0))
-    acct = b.accounts["A"]
-    assert math.isclose(acct.equity_sol({}, 150), config.STARTING_SOL_PER_AGENT)
+    b.submit(Order("A", "BUY", "ETH", usd_amount=1_000))
+    assert math.isclose(b.accounts["A"].equity_usd({}), config.STARTING_USD_PER_AGENT)
 
 
-def test_buy_of_vanished_token_is_refunded():
+def test_buy_with_no_price_is_refunded():
     b = PaperBroker(["A"])
-    b.submit(Order("A", "BUY", "TOKEN", "TST", sol_amount=1.0))
-    fills = b.fill_pending({}, sol_usd=150, now=0)
+    b.submit(Order("A", "BUY", "ETH", usd_amount=1_000))
+    fills = b.fill_pending({}, now=0)
     assert fills[0]["kind"] == "BUY_FAILED"
-    assert math.isclose(b.accounts["A"].cash_sol, config.STARTING_SOL_PER_AGENT)
+    assert math.isclose(b.accounts["A"].cash_usd, config.STARTING_USD_PER_AGENT)
 
 
 def test_sell_waits_through_a_data_gap_then_fills():
-    from paper_trader.broker import SELL_WAIT_TICKS
     b = PaperBroker(["A"])
-    b.submit(Order("A", "BUY", "TOKEN", "TST", sol_amount=1.0))
-    b.fill_pending({"TOKEN": snap()}, sol_usd=150, now=0)
-    b.submit(Order("A", "SELL", "TOKEN", "TST"))
-    for _ in range(SELL_WAIT_TICKS - 1):
-        assert b.fill_pending({}, sol_usd=150, now=0) == []   # token missing: keep waiting
-    fills = b.fill_pending({"TOKEN": snap()}, sol_usd=150, now=0)  # data is back
-    assert fills[0]["kind"] == "SELL" and fills[0]["quote"]["sol_out"] > 0.95
-
-
-def test_sell_of_token_gone_for_good_is_written_off():
-    from paper_trader.broker import SELL_WAIT_TICKS
-    b = PaperBroker(["A"])
-    b.submit(Order("A", "BUY", "TOKEN", "TST", sol_amount=1.0))
-    b.fill_pending({"TOKEN": snap()}, sol_usd=150, now=0)
-    b.submit(Order("A", "SELL", "TOKEN", "TST"))
-    fills = []
-    for _ in range(SELL_WAIT_TICKS + 1):
-        fills += b.fill_pending({}, sol_usd=150, now=0)
-    assert fills[0]["pnl_sol"] < -0.99
+    b.submit(Order("A", "BUY", "ETH", usd_amount=1_000))
+    b.fill_pending({"ETH": snap()}, now=0)
+    b.submit(Order("A", "SELL", "ETH"))
+    for _ in range(20):
+        assert b.fill_pending({}, now=0) == []   # no price: keep waiting, never write off
+    fills = b.fill_pending({"ETH": snap()}, now=0)
+    assert fills[0]["kind"] == "SELL" and fills[0]["quote"]["usd_out"] > 990

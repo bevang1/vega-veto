@@ -1,13 +1,13 @@
 """
-Save every decision to a local SQLite file (data/paper_trades.db).
+Save every decision to a local SQLite file (data/crypto_desk.db).
 
 The dashboard shows the recent past; this file keeps everything, across
 runs. Open it with DuckDB (it reads SQLite files directly) to analyse your
 agents afterwards, e.g.:
 
     duckdb -c "INSTALL sqlite; LOAD sqlite;
-               SELECT agent, COUNT(*), SUM(pnl_sol)
-               FROM sqlite_scan('data/paper_trades.db', 'events')
+               SELECT agent, COUNT(*), SUM(pnl_usd)
+               FROM sqlite_scan('data/crypto_desk.db', 'events')
                WHERE kind = 'SELL' GROUP BY agent"
 """
 
@@ -21,10 +21,10 @@ from pathlib import Path
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
     run_id TEXT, market_time REAL, kind TEXT, agent TEXT, symbol TEXT,
-    address TEXT, pnl_sol REAL, payload TEXT
+    pnl_usd REAL, payload TEXT
 );
 CREATE TABLE IF NOT EXISTS equity (
-    run_id TEXT, market_time REAL, agent TEXT, equity_sol REAL
+    run_id TEXT, market_time REAL, agent TEXT, equity_usd REAL
 );
 """
 
@@ -43,13 +43,13 @@ class Store:
     def event(self, e: dict) -> None:
         if self.con:
             self.con.execute(
-                "INSERT INTO events VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT INTO events VALUES (?,?,?,?,?,?,?)",
                 (self.run_id, e["t"], e["kind"], e.get("agent"), e.get("symbol"),
-                 e.get("address"), e.get("pnl_sol"), json.dumps(e, default=str)))
+                 e.get("pnl_usd"), json.dumps(e, default=str)))
 
-    def equity(self, t: float, agent: str, equity_sol: float) -> None:
+    def equity(self, t: float, agent: str, equity_usd: float) -> None:
         if self.con:
-            self.con.execute("INSERT INTO equity VALUES (?,?,?,?)", (self.run_id, t, agent, equity_sol))
+            self.con.execute("INSERT INTO equity VALUES (?,?,?,?)", (self.run_id, t, agent, equity_usd))
 
     def commit(self) -> None:
         if self.con:

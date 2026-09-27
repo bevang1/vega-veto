@@ -1,104 +1,83 @@
 """
-A simulated memecoin market, for learning the tool offline.
+A simulated market of major coins, for learning the tool offline.
 
-Run with --demo. Tokens are born, pump, bleed, chop around, or get rugged,
-roughly in the proportions you see in real memecoin markets (most die). The
-dashboard labels this mode SIMULATED MARKET so you never confuse it with
-real data. Profits here mean nothing about real markets: we wrote the rules.
+Run with --demo. Each tick is one market minute and produces one candle per
+coin. Every coin follows BTC to a degree (its "beta"), plus its own noise,
+and the market drifts between regimes: calm ranges, trends up, trends down,
+and the occasional sharp shock. It's livelier than the real thing so you
+see trades within minutes. The dashboard labels this mode SIMULATED MARKET
+so you never confuse it with real data. Profits here mean nothing about
+real markets: we wrote the rules.
 """
 
 from __future__ import annotations
 
-import math
 import random
-import string
 from collections import deque
 
 from . import config
-from .models import TokenSnapshot
+from .models import AssetSnapshot, Candle
 
-# Each token secretly gets a "fate" that drives its price path.
-# (drift per tick, volatility per tick, chance of being picked)
-FATES = {
-    "rug":    (0.004, 0.030, 0.30),   # pumps a bit to attract buyers, then liquidity is pulled
-    "bleed":  (-0.004, 0.025, 0.30),  # slow death, the most common real outcome
-    "chop":   (0.000, 0.030, 0.20),
-    "pump":   (0.010, 0.035, 0.15),   # a real run, then fades
-    "moon":   (0.018, 0.040, 0.05),   # rare big winner
+# symbol: (start price, per-minute volatility, beta to BTC, 24h volume USD, spread %)
+COINS = {
+    "BTC":  (65_000.0, 0.0012, 1.0, 900_000_000, 0.01),
+    "ETH":  (3_200.0,  0.0016, 1.1, 450_000_000, 0.01),
+    "SOL":  (150.0,    0.0024, 1.3, 180_000_000, 0.02),
+    "XRP":  (0.55,     0.0022, 1.1, 120_000_000, 0.03),
+    "LTC":  (80.0,     0.0020, 1.0,  40_000_000, 0.04),
+    "ADA":  (0.45,     0.0024, 1.2,  35_000_000, 0.05),
+    "AVAX": (30.0,     0.0028, 1.3,  30_000_000, 0.05),
+    "LINK": (14.0,     0.0026, 1.2,  45_000_000, 0.04),
+    "DOT":  (6.5,      0.0026, 1.2,  20_000_000, 0.06),
+    "BCH":  (400.0,    0.0022, 1.0,  25_000_000, 0.05),
 }
-WINDOW_M5 = 30   # ticks in 5 minutes when a tick = 10 market seconds
-WINDOW_H1 = 360
+# Market regimes: (BTC drift per minute, volatility multiplier, typical length in minutes)
+REGIMES = {
+    "range":      (0.0000,  1.0, 120),
+    "trend_up":   (0.0006,  1.1, 90),
+    "trend_down": (-0.0006, 1.2, 90),
+    "shock":      (-0.0030, 2.5, 8),    # a quick flush, the kind mean reversion hunts
+}
 
 
-def _symbol(rng: random.Random) -> str:
-    stems = ["DOG", "CAT", "PEPE", "WIF", "BONK", "FROG", "MOON", "CHAD", "GIGA", "NEKO",
-             "BAT", "APE", "SHIB", "GOAT", "HAM", "RAT", "BEAR", "DUCK", "PNUT", "FISH"]
-    return rng.choice(stems) + rng.choice(["", "", "AI", "INU", "X", "2", "SOL", "KING"])
-
-
-class _SimToken:
-    def __init__(self, rng: random.Random, born_at: float) -> None:
+class _SimCoin:
+    def __init__(self, rng: random.Random, symbol: str) -> None:
         self.rng = rng
-        self.address = "".join(rng.choices(string.ascii_letters + string.digits, k=44))
-        self.symbol = _symbol(rng)
-        names, weights = zip(*[(k, v[2]) for k, v in FATES.items()])
-        self.fate = rng.choices(names, weights)[0]
-        self.drift, self.vol, _ = FATES[self.fate]
-        self.price = rng.uniform(0.00001, 0.002)
-        self.liquidity = rng.uniform(15_000, 250_000)
-        self.born_at = born_at
-        self.age_ticks = 0
-        self.turn_at = rng.randint(120, 600)   # when the story changes (pump fades, rug pulls)
-        self.dead = False
-        self.prices: deque[float] = deque(maxlen=WINDOW_H1 + 1)
-        self.flow: deque[tuple[int, int, float]] = deque(maxlen=WINDOW_H1)  # (buys, sells, usd volume)
+        self.symbol = symbol
+        self.price, self.vol, self.beta, self.volume_24h, self.spread_pct = COINS[symbol]
+        self.price *= rng.uniform(0.9, 1.1)
+        self.drift = 0.0            # the coin's own story, on top of the market's
+        self.candles: list[Candle] = []
+        # Closes over the last day, so the 24h change is a real 24h change
+        # (once the demo has run that long; before that, since it started).
+        self.day: deque[float] = deque(maxlen=1440)
 
-    def step(self) -> None:
-        self.age_ticks += 1
-        drift = self.drift
-        if self.age_ticks > self.turn_at:
-            if self.fate == "rug" and not self.dead:
-                self.liquidity *= 0.05     # the pull: 95% of liquidity gone in one tick
-                self.price *= 0.10
-                self.dead = True
-            elif self.fate in ("pump", "moon"):
-                drift = -0.006             # every pump fades eventually
-        if self.dead:
-            drift = -0.01
-        ret = drift + self.vol * self.rng.gauss(0, 1)
-        ret = max(ret, -0.6)
-        self.price *= 1 + ret
-        self.liquidity *= 1 + ret * 0.3    # liquidity follows price, but less
-        self.prices.append(self.price)
+    def step(self, t: float, market_ret: float, vol_mult: float) -> None:
+        if self.rng.random() < 0.01:   # now and then the coin gets its own narrative
+            self.drift = self.rng.choice([0.0, 0.0, 0.0008, -0.0006])
+        open_ = self.price
+        high = low = open_
+        # Four sub-steps make each candle's high/low wider than its open/close.
+        for _ in range(4):
+            own = self.drift / 4 + self.vol * vol_mult * self.rng.gauss(0, 1) / 2
+            self.price *= 1 + self.beta * market_ret / 4 + own
+            high, low = max(high, self.price), min(low, self.price)
+        move = abs(self.price / open_ - 1)
+        # Busier minutes when price moves more (and in hectic regimes), like
+        # real markets: big moves come with big volume.
+        busy = vol_mult * (0.4 + move / self.vol) ** 1.5
+        usd = self.volume_24h / 1440 * max(0.1, busy * self.rng.gauss(1, 0.25))
+        self.candles.append(Candle(t, open_, high, low, self.price, usd / self.price))
+        self.candles = self.candles[-config.HISTORY_MINUTES:]
+        self.day.append(open_)
 
-        # Transactions: more activity when moving, buys dominate on up-ticks.
-        activity = max(1.0, self.rng.gauss(8 + 300 * abs(ret), 3))
-        buy_share = min(0.9, max(0.1, 0.5 + ret * 8 + self.rng.gauss(0, 0.08)))
-        buys = int(activity * buy_share)
-        sells = int(activity * (1 - buy_share))
-        usd = (buys + sells) * self.rng.uniform(40, 400)
-        self.flow.append((buys, sells, usd))
-
-    def _pct_change(self, ticks: int) -> float:
-        if len(self.prices) < 2:
-            return 0.0
-        past = self.prices[max(0, len(self.prices) - 1 - ticks)]
-        return (self.price / past - 1) * 100
-
-    def snapshot(self, now: float) -> TokenSnapshot:
-        m5 = list(self.flow)[-WINDOW_M5:]
-        h1 = list(self.flow)
-        return TokenSnapshot(
-            address=self.address, symbol=self.symbol, name=f"{self.symbol} (simulated)",
-            pair_address="sim-" + self.address[:8], dex="simulated", url="",
-            price_usd=self.price, liquidity_usd=self.liquidity,
-            market_cap=self.price * 1_000_000_000,
-            created_at_ms=self.born_at * 1000,
-            vol_m5=sum(f[2] for f in m5), vol_h1=sum(f[2] for f in h1), vol_h24=sum(f[2] for f in h1) * 5,
-            buys_m5=sum(f[0] for f in m5), sells_m5=sum(f[1] for f in m5),
-            buys_h1=sum(f[0] for f in h1), sells_h1=sum(f[1] for f in h1),
-            chg_m5=self._pct_change(WINDOW_M5), chg_h1=self._pct_change(WINDOW_H1),
-            chg_h24=self._pct_change(WINDOW_H1),
+    def snapshot(self) -> AssetSnapshot:
+        half = self.price * self.spread_pct / 100 / 2
+        return AssetSnapshot(
+            symbol=self.symbol, product_id=f"{self.symbol}-USD", name=f"{self.symbol} (simulated)",
+            url="", price_usd=self.price, bid=self.price - half, ask=self.price + half,
+            volume_24h_usd=self.volume_24h, chg_24h=(self.price / self.day[0] - 1) * 100,
+            candles=list(self.candles),
         )
 
 
@@ -107,33 +86,31 @@ class DemoFeed:
     is_live = False
     tick_seconds = config.DEMO_TICK_SECONDS
 
-    def __init__(self, seed: int | None = None, n_tokens: int = 60) -> None:
+    def __init__(self, seed: int | None = None) -> None:
         self.rng = random.Random(seed)
-        self.clock = 1_750_000_000.0        # market time, advanced 10s per tick
-        self.sol_usd = 150.0
+        self.clock = 1_750_000_000.0        # market time, advanced one minute per tick
         self.status = "ok: simulated"
-        # Start with tokens of mixed ages so the market isn't all brand new.
-        self.tokens: list[_SimToken] = []
-        for _ in range(n_tokens):
-            t = _SimToken(self.rng, self.clock)
-            for _ in range(self.rng.randint(0, 400)):
-                t.step()
-            t.born_at = self.clock - t.age_ticks * config.DEMO_SIM_SECONDS_PER_TICK
-            self.tokens.append(t)
-        self.n_tokens = n_tokens
+        self.coins = [_SimCoin(self.rng, s) for s in COINS]
+        self.regime, self.regime_left = "range", 60
+        # Pre-fill history so the indicators are ready from the first tick.
+        for _ in range(config.HISTORY_MINUTES):
+            self._step()
 
     def now(self) -> float:
         return self.clock
 
-    def poll(self, keep: set[str] = frozenset()) -> dict[str, TokenSnapshot]:
+    def _step(self) -> None:
+        self.regime_left -= 1
+        if self.regime_left <= 0:
+            self.regime = self.rng.choices(list(REGIMES), [0.45, 0.25, 0.2, 0.1])[0]
+            self.regime_left = max(3, int(self.rng.expovariate(1 / REGIMES[self.regime][2])))
+        drift, vol_mult, _ = REGIMES[self.regime]
+        market_ret = drift + 0.0010 * vol_mult * self.rng.gauss(0, 1)
         self.clock += config.DEMO_SIM_SECONDS_PER_TICK
-        self.sol_usd *= 1 + self.rng.gauss(0, 0.0008)
-        for t in self.tokens:
-            t.step()
-        # Dead tokens fall off the screener after a while, like on the real
-        # feed, even if you still hold them. The engine must cope with that.
-        self.tokens = [t for t in self.tokens
-                       if not (t.dead and t.age_ticks > t.turn_at + 60) and t.liquidity > 500]
-        while len(self.tokens) < self.n_tokens:
-            self.tokens.append(_SimToken(self.rng, self.clock))
-        return {t.address: t.snapshot(self.clock) for t in self.tokens if not math.isnan(t.price)}
+        for c in self.coins:
+            c.step(self.clock, market_ret, vol_mult)
+
+    def poll(self, keep: set[str] = frozenset()) -> dict[str, AssetSnapshot]:
+        self._step()
+        self.status = f"ok: simulated · regime {self.regime.replace('_', ' ')}"
+        return {c.symbol: c.snapshot() for c in self.coins}

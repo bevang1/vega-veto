@@ -22,9 +22,10 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
+from paper_trader import config
 from paper_trader.demo_feed import DemoFeed
 from paper_trader.engine import Engine
-from paper_trader.feeds import DexScreenerFeed
+from paper_trader.feeds import CoinbaseFeed
 from paper_trader.store import Store
 
 
@@ -52,8 +53,15 @@ class GitHubPoster:
 
 
 # --- Report text ----------------------------------------------------------------
-def signed(v: float, digits: int = 3) -> str:
-    return f"{v:+.{digits}f}"
+def initials(name: str) -> str:
+    """Same short agent code as the dashboard badges: TREND RIDER -> TR."""
+    words = name.split()
+    return words[0][0] + words[1][0] if len(words) > 1 else name[:2]
+
+
+def usd(v: float) -> str:
+    """Signed dollars: +$12.34 / -$5.00."""
+    return f"{'+' if v >= 0 else '-'}${abs(v):,.2f}"
 
 
 def report(engine: Engine, since_event_id: int, number: int, started: float, mention: str) -> str:
@@ -65,19 +73,19 @@ def report(engine: Engine, since_event_id: int, number: int, started: float, men
         return f"{mention} update {number} · {now} · no data yet. Feed: {engine.feed.status}"
 
     t = st["total"]
-    pnl_sol = t["equity_sol"] - t["start_sol"]
+    pnl_usd = t["equity_usd"] - t["start_usd"]
     lines = [
         f"{mention} **Update {number}** · {now} · running {minutes:.0f} min",
-        f"**Desk P&L: {signed(pnl_sol)} SOL ({t['pnl_pct']:+.2f}%)** · equity {t['equity_sol']:.3f} SOL "
-        f"≈ ${t['equity_sol'] * st['sol_usd']:,.0f} · open {t['open']} · fees paid {t['fees_sol']:.3f} SOL",
-        f"Feed: {st['status']} · SOL ${st['sol_usd']:,.2f}",
+        f"**Desk P&L: {usd(pnl_usd)} ({t['pnl_pct']:+.2f}%)** · equity ${t['equity_usd']:,.2f} "
+        f"· open {t['open']} · fees paid ${t['fees_usd']:,.2f}",
+        f"Feed: {st['status']} · {st['benchmark']} ${st['benchmark_usd'] or 0:,.2f}",
         "",
-        "| Agent | P&L SOL | P&L % | Closed trades | Win rate | Open | State |",
+        "| Agent | P&L $ | P&L % | Closed trades | Win rate | Open | State |",
         "|---|---:|---:|---:|---:|---:|---|",
     ]
     for a in st["agents"]:
         win = "—" if a["win_rate"] is None else f"{a['win_rate']:.0f}%"
-        lines.append(f"| {a['name']} | {signed(a['pnl_sol'])} | {a['pnl_pct']:+.2f}% | {a['trades']} | "
+        lines.append(f"| {a['name']} | {usd(a['pnl_usd'])} | {a['pnl_pct']:+.2f}% | {a['trades']} | "
                      f"{win} | {a['open']} | {'KILLED' if a['killed'] else 'armed'} |")
 
     new = [e for e in reversed(st["events"]) if e["id"] > since_event_id and e["kind"] in ("BUY", "SELL", "KILL")]
@@ -86,23 +94,23 @@ def report(engine: Engine, since_event_id: int, number: int, started: float, men
     sells = [e for e in new if e["kind"] == "SELL"]
     buys = [e for e in new if e["kind"] == "BUY"]
     kills = [e for e in new if e["kind"] == "KILL"]
-    realised = sum(e["pnl_sol"] for e in sells)
-    lines += ["", f"**Since last update:** {len(sells)} sell(s), realised {signed(realised)} SOL · {len(buys)} buy(s)"]
+    realised = sum(e["pnl_usd"] for e in sells)
+    lines += ["", f"**Since last update:** {len(sells)} sell(s), realised {usd(realised)} · {len(buys)} buy(s)"]
     for e in kills:
         lines.append(f"- ⛔ {e['headline']}")
     for e in sells[:12]:
-        lines.append(f"- {'✅' if e['pnl_sol'] > 0 else '🔻'} SELL **{e['symbol']}** ({e['agent']}) "
-                     f"{e['pnl_pct']:+.1f}% ({signed(e['pnl_sol'])} SOL) · {e.get('reason', '')}")
+        lines.append(f"- {'✅' if e['pnl_usd'] > 0 else '🔻'} SELL **{e['symbol']}** ({e['agent']}) "
+                     f"{e['pnl_pct']:+.2f}% ({usd(e['pnl_usd'])}) · {e.get('reason', '')}")
     if len(sells) > 12:
         lines.append(f"- …and {len(sells) - 12} more sells")
     if buys:
-        lines.append("- 🟢 Bought: " + ", ".join(f"{e['symbol']} ({e['agent'][:2]})" for e in buys[:20])
+        lines.append("- 🟢 Bought: " + ", ".join(f"{e['symbol']} ({initials(e['agent'])})" for e in buys[:20])
                      + (f" +{len(buys) - 20} more" if len(buys) > 20 else ""))
     if st["positions"]:
         lines += ["", "**Open now:** " + ", ".join(
-            f"{p['symbol']} ({p['agent'][:2]}) {p['pnl_pct']:+.1f}%{' (data gap)' if p.get('stale') else ''}"
+            f"{p['symbol']} ({initials(p['agent'])}) {p['pnl_pct']:+.2f}%{' (data gap)' if p.get('stale') else ''}"
             for p in st["positions"])]
-    lines += ["", "_Paper money only. Values are what selling now would return, after fees and price impact._"]
+    lines += ["", "_Paper money only. Values are what selling now would return, after the spread, fees and price impact._"]
     return "\n".join(lines)
 
 
@@ -114,7 +122,7 @@ def main() -> None:
     parser.add_argument("--print-only", action="store_true", help="print updates instead of posting")
     args = parser.parse_args()
 
-    feed = DemoFeed(seed=1) if args.demo else DexScreenerFeed()
+    feed = DemoFeed(seed=1) if args.demo else CoinbaseFeed()
     engine = Engine(feed, Store(None))
     user = os.environ.get("NOTIFY_USER", "")
     mention = f"@{user}" if user else ""
@@ -125,9 +133,9 @@ def main() -> None:
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         poster.open_issue(
             f"Live paper run · {stamp}",
-            f"{mention} Vega Veto is running on **live Solana data with paper money** for "
+            f"{mention} Vega Veto is running on **live Coinbase prices for major coins, with paper money** for "
             f"{args.hours:g} h. An update is posted here every {args.every:g} min.\n\n"
-            "Each of the 4 agents starts with 10 fake SOL (40 SOL total).")
+            f"Each of the 4 agents starts with ${config.STARTING_USD_PER_AGENT:,.0f} of fake money.")
 
     def send(text: str) -> None:
         if poster:

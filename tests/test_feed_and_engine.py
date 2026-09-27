@@ -1,72 +1,96 @@
-"""Live-feed parsing (without the network) and a full engine run on the demo market."""
+"""Live-feed parsing (without the network), indicators, and a full engine run on the demo market."""
 
 import json
 
+from paper_trader import config
 from paper_trader.demo_feed import DemoFeed
 from paper_trader.engine import Engine
-from paper_trader.feeds import SOL_MINT, DexScreenerFeed
-from paper_trader.models import TokenSnapshot
+from paper_trader.feeds import CoinbaseFeed
+from paper_trader.models import AssetSnapshot, Candle, Position
+from paper_trader.signals import add_relative_strength, features, rsi
 from paper_trader.store import Store
+from tests.test_broker import snap
 
-# Shaped like a DexScreener pair: note prices arrive as strings.
-PAIR = {
-    "chainId": "solana", "dexId": "raydium", "url": "https://dexscreener.com/solana/pair1",
-    "pairAddress": "pair1", "baseToken": {"address": "MEME", "name": "Meme", "symbol": "MEME"},
-    "quoteToken": {"address": SOL_MINT, "symbol": "SOL"},
-    "priceNative": "0.00001", "priceUsd": "0.0015",
-    "txns": {"m5": {"buys": 40, "sells": 20}, "h1": {"buys": 300, "sells": 250}},
-    "volume": {"m5": 12000, "h1": 90000, "h24": 1e6},
-    "priceChange": {"m5": 5.5, "h1": 12, "h24": -3},
-    "liquidity": {"usd": 80000, "base": 1, "quote": 1},
-    "marketCap": 1500000, "pairCreatedAt": 1_700_000_000_000,
-}
+# Shaped like Coinbase's replies: note numbers arrive as strings, and
+# candles come newest first as [time, low, high, open, close, volume].
+TICKER = {"price": "65000.5", "bid": "65000.0", "ask": "65001.0", "volume": "12000.5", "size": "0.01"}
+STATS = {"open": "64000", "high": "66000", "low": "63500", "last": "65000.5", "volume": "12000"}
+CANDLES = [[1_700_000_000 + 60 * i, 64900, 65100, 65000, 65000 + i, 5.0] for i in range(120)][::-1]
 
 
-def test_parse_dexscreener_pair():
-    s = TokenSnapshot.from_dexscreener(PAIR)
-    assert s.price_usd == 0.0015 and s.buys_m5 == 40 and s.liquidity_usd == 80000
-    assert s.chg_m5 == 5.5 and s.symbol == "MEME"
+def test_parse_coinbase_ticker_and_candles():
+    candles = sorted((Candle.from_coinbase(r) for r in CANDLES), key=lambda c: c.t)
+    s = AssetSnapshot.from_coinbase("BTC-USD", TICKER, STATS, candles)
+    assert s.symbol == "BTC" and s.price_usd == 65000.5 and s.bid == 65000.0
+    assert round(s.chg_24h, 3) == round((65000.5 / 64000 - 1) * 100, 3)
+    assert s.volume_24h_usd == 12000.5 * 65000.5
+    assert s.candles[0].t < s.candles[-1].t and s.candles[-1].close == 65119
 
 
 def test_parse_tolerates_missing_fields():
-    s = TokenSnapshot.from_dexscreener({"baseToken": {"address": "X"}})
-    assert s.price_usd == 0 and s.buys_m5 == 0
+    s = AssetSnapshot.from_coinbase("ETH-USD", {}, None, [])
+    assert s.price_usd == 0 and s.chg_24h == 0 and s.spread_pct == 0
 
 
 def test_live_feed_poll_with_fake_http():
-    feed = DexScreenerFeed()
-    shallow = dict(PAIR, pairAddress="pair2", liquidity={"usd": 1000})
-    sol = dict(PAIR, baseToken={"address": SOL_MINT, "symbol": "SOL"}, priceUsd="150.5",
-               quoteToken={"address": "USDC", "symbol": "USDC"})
+    feed = CoinbaseFeed(["BTC", "ETH"])
+    calls = []
 
     def fake_get(path):
-        if path.startswith("/token-"):
-            return [{"chainId": "solana", "tokenAddress": "MEME"}, {"chainId": "base", "tokenAddress": "NOPE"}]
-        return {"pairs": [shallow, PAIR, sol]}
+        calls.append(path)
+        if path.startswith("/products/ETH-USD/ticker"):
+            return None                               # a failed request: ETH just goes missing
+        if path.endswith("/ticker"):
+            return TICKER
+        if path.endswith("/stats"):
+            return STATS
+        return CANDLES
 
     feed._get = fake_get
     snaps = feed.poll()
-    assert feed.sol_usd == 150.5
-    assert list(snaps) == ["MEME"]                     # other chains ignored
-    assert snaps["MEME"].pair_address == "pair1"       # deepest pool chosen
+    assert list(snaps) == ["BTC"]
+    assert len(snaps["BTC"].candles) == 120
+    assert any("granularity=60" in c for c in calls)
+
+
+def test_indicators_on_a_steady_uptrend():
+    candles = [Candle(60 * i, 100 + i * 0.1, 100 + i * 0.1 + 0.05, 100 + i * 0.1 - 0.05,
+                      100 + i * 0.1 + 0.08, 10) for i in range(200)]
+    s = snap(price=candles[-1].close, candles=candles)
+    f = features(s, now=0)
+    assert f["trend_pct"] > 0 and f["chg_h1"] > 0
+    assert f["rsi"] > 70                                  # only up-moves: overbought
+    assert f["history_min"] == 200
+
+
+def test_rsi_bounds():
+    assert rsi([1, 2, 3, 4, 5] * 10) >= 0
+    assert rsi(list(range(100, 0, -1))) < 5
+
+
+def test_relative_strength_vs_btc():
+    feats = {"BTC": {"chg_h1": 1.0}, "SOL": {"chg_h1": 3.0}}
+    add_relative_strength(feats, "BTC")
+    assert feats["SOL"]["rs_h1"] == 2.0 and feats["BTC"]["rs_h1"] == 0.0
 
 
 def test_engine_runs_and_accounting_holds():
     engine = Engine(DemoFeed(seed=5), Store(None))
-    for _ in range(400):
+    for _ in range(600):
         engine.tick()
     state = engine.state()
     json.dumps(state, default=str)                     # the dashboard can serialise it
+    assert {a["symbol"] for a in state["assets"]} == set(config.UNIVERSE)
     for acct in engine.broker.accounts.values():
-        assert acct.cash_sol >= -1e-9                   # never spends money it doesn't have
+        assert acct.cash_usd >= -1e-6                   # never spends money it doesn't have
         assert len(acct.positions) <= engine.limits.max_open_positions
     kinds = {e["kind"] for e in engine.events}
     assert "BUY" in kinds and "SELL" in kinds
 
 
 class GappyFeed:
-    """Replays one token, then drops it (or blanks its liquidity) for a tick."""
-    name, is_live, tick_seconds, status, sol_usd = "test", True, 0, "ok", 150.0
+    """Replays one coin, then drops it for a couple of ticks."""
+    name, is_live, tick_seconds, status = "test", True, 0, "ok"
 
     def __init__(self, frames):
         self.frames, self.t = frames, 1_700_000_000.0
@@ -80,42 +104,16 @@ class GappyFeed:
 
 
 def test_data_gap_is_not_a_100_percent_loss():
-    from paper_trader.models import Position
-    good = TokenSnapshot.from_dexscreener(PAIR)
-    blank = TokenSnapshot.from_dexscreener(dict(PAIR, liquidity={}))   # liquidity omitted
-    engine = Engine(GappyFeed([{"MEME": good}, {"MEME": blank}, {}]), Store(None))
-    acct = engine.broker.accounts["MOMENTUM"]
-    acct.cash_sol -= 1.0
-    acct.positions["MEME"] = Position("MOMENTUM", "MEME", "MEME", tokens=1.0 * 150 / 0.0015,
-                                      cost_sol=1.0, entry_price_usd=0.0015, entry_liquidity_usd=80000,
-                                      opened_at=engine.feed.t, entry_reason="test", peak_price_usd=0.0015)
+    good = snap(symbol="ETH")
+    engine = Engine(GappyFeed([{"ETH": good}, {}, {}]), Store(None))
+    name = engine.agents[0].name
+    acct = engine.broker.accounts[name]
+    acct.cash_usd -= 1_000
+    acct.positions["ETH"] = Position(name, "ETH", qty=10, cost_usd=1_000, entry_price_usd=100,
+                                     opened_at=engine.feed.t, entry_reason="test", peak_price_usd=100)
     for _ in range(3):
         engine.tick()
-        mo = next(a for a in engine.state()["agents"] if a["name"] == "MOMENTUM")
-        assert mo["pnl_pct"] > -3, "a gap in the data must not show as a big loss"
-        assert not mo["killed"]
-
-
-def test_sol_and_busy_tokens_dont_crowd_others_out_of_the_reply():
-    # Mimic the real API returning at most 30 pairs per reply, with SOL
-    # trading in 50 pools. Every tracked token must still come back.
-    feed = DexScreenerFeed()
-    tokens = [f"T{i}" for i in range(25)]
-    feed.discover = lambda keep: None
-    feed.tracked = tokens
-    sol_pairs = [dict(PAIR, pairAddress=f"sol{i}", priceUsd="150.5",
-                      baseToken={"address": SOL_MINT, "symbol": "SOL"},
-                      quoteToken={"symbol": "USDC"}) for i in range(50)]
-
-    def capped_get(path):
-        asked = path.rsplit("/", 1)[-1].split(",")
-        pairs = []
-        for a in asked:
-            pairs += sol_pairs if a == SOL_MINT else [
-                dict(PAIR, pairAddress=f"{a}-{k}", baseToken={"address": a, "symbol": a}) for k in range(2)]
-        return {"pairs": pairs[:30]}
-
-    feed._get = capped_get
-    snaps = feed.poll()
-    assert feed.sol_usd == 150.5
-    assert sorted(snaps) == sorted(tokens)
+        a = next(x for x in engine.state()["agents"] if x["name"] == name)
+        assert a["pnl_pct"] > -1, "a gap in the data must not show as a big loss"
+        assert not a["killed"]
+    assert "ETH" in acct.positions                      # and it wasn't panic-sold
