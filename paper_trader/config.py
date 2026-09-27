@@ -19,8 +19,8 @@ QUOTE_CURRENCY = "USD"
 BENCHMARK = "BTC"          # "relative strength" means beating this coin
 
 # --- Paper money --------------------------------------------------------------
-STARTING_USD_PER_AGENT = 10_000.0   # each agent gets its own fake account
-MIN_ORDER_USD = 10.0                # exchanges reject tiny orders; so do we
+STARTING_USD_PER_AGENT = 25.0      # each agent gets its own fake account: a small, realistic start
+MIN_ORDER_USD = 1.0                 # Coinbase's usual minimum order is $1; smaller orders are rejected
 
 # --- Costs (what makes paper trading honest) ----------------------------------
 TAKER_FEE = 0.004       # ESTIMATE: 0.40% per fill. Market orders pay the "taker" fee:

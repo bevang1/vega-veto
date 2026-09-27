@@ -12,13 +12,13 @@ OK_FEATS = {"history_min": 300}
 
 
 def entry(acct=None, s=None, feats=OK_FEATS):
-    return check_entry(acct or Account("A"), s or snap(), feats, 10_000.0, NOW, L, 0.15)
+    return check_entry(acct or Account("A"), s or snap(), feats, 25.0, NOW, L, 0.15)
 
 
 def test_healthy_coin_is_approved_with_capped_size():
     size, blocked = entry()
     assert blocked == []
-    assert 0 < size <= 10_000 * L.max_position_fraction
+    assert 0 < size <= 25.0 * L.max_position_fraction
 
 
 def test_thin_volume_is_blocked():
@@ -42,7 +42,7 @@ def test_size_never_exceeds_slice_of_daily_volume():
 
 
 def test_pending_buys_count_toward_the_position_limit():
-    _, blocked = check_entry(Account("A"), snap(), OK_FEATS, 10_000.0, NOW, L, 0.15,
+    _, blocked = check_entry(Account("A"), snap(), OK_FEATS, 25.0, NOW, L, 0.15,
                              pending_buys=L.max_open_positions)
     assert any("max" in b for b in blocked)
 

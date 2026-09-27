@@ -108,8 +108,8 @@ def test_data_gap_is_not_a_100_percent_loss():
     engine = Engine(GappyFeed([{"ETH": good}, {}, {}]), Store(None))
     name = engine.agents[0].name
     acct = engine.broker.accounts[name]
-    acct.cash_usd -= 1_000
-    acct.positions["ETH"] = Position(name, "ETH", qty=10, cost_usd=1_000, entry_price_usd=100,
+    acct.cash_usd -= 10
+    acct.positions["ETH"] = Position(name, "ETH", qty=0.1, cost_usd=10, entry_price_usd=100,
                                      opened_at=engine.feed.t, entry_reason="test", peak_price_usd=100)
     for _ in range(3):
         engine.tick()

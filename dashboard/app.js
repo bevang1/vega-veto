@@ -479,7 +479,7 @@ function drawPnl() {
   ctx.clearRect(0, 0, w, h);
   const agents = S.state?.agents || [];
   if (!agents.length) return;
-  const max = Math.max(1, ...agents.map((a) => Math.abs(a.pnl_usd)));
+  const max = Math.max(0.01, ...agents.map((a) => Math.abs(a.pnl_usd)));
   // Label column on the left; bars grow either way from a zero line in the
   // middle of the remaining space, with room left for the value text.
   const labelW = 132, half = (w - labelW - 16) / 2 - 52, mid = labelW + 8 + (w - labelW - 16) / 2;

@@ -221,7 +221,7 @@ class Engine:
                 "open": len(acct.positions), "trades": closed,
                 "win_rate": acct.wins / closed * 100 if closed else None,
                 "killed": acct.killed,
-                "equity_hist": [round(v, 2) for _, v in list(self.equity_hist[agent.name])[::2]],
+                "equity_hist": [round(v, 4) for _, v in list(self.equity_hist[agent.name])[::2]],
             })
             for p in acct.positions.values():
                 snap = self.valuation.get(p.symbol)

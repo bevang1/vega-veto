@@ -71,7 +71,7 @@ Tests: `python3 -m pip install pytest && python3 -m pytest`.
 | **Top bar** | Feed status, BTC price, the cost model in use, and a big **SIMULATED** or **LIVE DATA** badge so you always know which you're looking at. |
 | **Signal Iris** (centre) | One bundle of strands per coin. **Length = signal score** (trend, 1h momentum, up-vs-down volume, volume acceleration). **White = up-volume dominates, red = down-volume dominates.** Strands in an agent's colour, marked ◆, are **held**. Buys burst outward, sells pull inward. Hover for the indicators (RSI, trend, z-score, strength vs BTC, spread); click to open it on Coinbase. The centre shows desk P&L. |
 | **Left accordion** | **Open positions** with live P&L (valued at what you'd *actually* get selling now, at the bid, after fees). **Activity** is every BUY, SELL, BLOCKED and alert. Click any row to see why it happened: the agent's checklist with ✓/✗, the fill price vs the trigger price, spread, fees, price impact, and the exit rule that fired. |
-| **Right** | Each agent's fake account, equity sparkline (dotted line = starting $10,000), trades, win rate, fees, and **ARMED/KILLED** state. Click an agent (or a chip up top) to filter everything to it. |
+| **Right** | Each agent's fake account, equity sparkline (dotted line = starting $25), trades, win rate, fees, and **ARMED/KILLED** state. Click an agent (or a chip up top) to filter everything to it. |
 | **Bottom** | Market-wide net up/down volume, which exit rules fire most (a pareto), and P&L per agent after all costs. |
 
 **PAUSE** stops new entries (exits keep running). **KILL ALL** sells everything
@@ -79,8 +79,8 @@ and stops every agent until you restart.
 
 ## The agents (the "sub-agents")
 
-Same objective, different playbooks, separate accounts ($10,000 of fake money
-each), so you can see which approach actually works rather than guessing.
+Same objective, different playbooks, separate accounts ($25 of fake money
+each, $100 for the desk), so you can see which approach actually works rather than guessing.
 They're the four classic families of systematic trading:
 
 | Agent | Buys when... |
