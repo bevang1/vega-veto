@@ -177,20 +177,13 @@ agent that loses 3% of its budget in a day stops until tomorrow.
 ### Setup (once)
 1. Sign up at alpaca.markets (free) and open the **Paper Trading** account.
 2. In the paper dashboard, generate **API keys** (a Key ID and a Secret).
-3. In this repo on GitHub: Settings → Secrets and variables → Actions →
-   New repository secret. Add `ALPACA_API_KEY_ID` and `ALPACA_API_SECRET_KEY`.
+3. Put them in your shell: `export ALPACA_API_KEY_ID=...` and
+   `export ALPACA_API_SECRET_KEY=...`.
 
-After that, the **Stock desk** workflow runs by itself every weekday: a
-morning job waits for the opening bell, and an afternoon job takes over
-(GitHub stops jobs at 6 hours; a session is 6.5). Each day gets its own issue
-with an update every 5 minutes that @mentions you. To run it right now:
-Actions → Stock desk → Run workflow.
-
-**GitHub Actions minutes:** a full trading day uses roughly 400–470 minutes.
-Private repos get 2,000 free minutes a month (about 4–5 trading days), and
-by default GitHub then *stops* the jobs rather than charging you. Public
-repos get unlimited free minutes; your keys stay secret either way. To use
-fewer minutes, turn off the schedule and run it manually on the days you want.
+Then run it yourself during market hours:
+`python3 stock_run.py --print-only` (prints its updates in the terminal). There is no
+scheduled GitHub workflow for it anymore; it was removed so it stops running
+(and failing) on its own.
 
 Honest limits: Alpaca's paper fills don't model market impact or queue
 position, though at $5k per trade in these stocks that's small. The free IEX
