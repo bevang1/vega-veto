@@ -10,7 +10,8 @@ It's also a learning project: keep code beginner-readable, and explain the
 "why" in comments.
 
 Also contains a US **stock desk** (`stock_desk/`, run by `stock_run.py`) that
-day-trades in an Alpaca PAPER account via the `Stock desk` GitHub workflow.
+day-trades in an Alpaca PAPER account. It's run by hand; its GitHub workflow
+was removed.
 `config.TRADING_URL` must stay the paper URL.
 
 ## Environment
